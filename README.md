@@ -1,1 +1,1 @@
-# src
+This repository contains the source code for (i) Recognising a child's engagement level in an adult-child interaction (Engagement_Level)  and (ii) Recognising Self-Stimulatory Behaviours (SSBD) of a child.
