@@ -1,0 +1,243 @@
+% JA_UGM_HCRF.m - Predict child's engagement level in adult-child
+% interaction. Execute this program by setting the working directory to
+% where this file exists. It is assumed that 'data' and 'output'
+% directories are present in the current folder. 
+
+% This program computes the output from Stage-1 referenced in the following paper:
+% Shyam Sundar Rajagopalan, O.V. Ramana Murthy, R. Goecke and Agata Rozga, Play with
+% Me Measuring a Childs Engagement in a Social Interaction. Proceedings of the IEEE International
+% Conference on Automatic Face and Gesture Recognition (FG 2015), Ljubljana, Slovenia, 4-8 May 2015
+%
+% Dataset: Multimodal Dyadic Behavior Dataset
+% (http://www.cbi.gatech.edu/mmdb/#)
+%
+% Tools: Undirected Graphical Model(UGM), Hidden Conditional Random
+% Fields(HCRF) and VLFeat.
+% UGM & HCRF: http://www.cs.ubc.ca/~schmidtm/Software/UGM.html
+% VLFeat: http://www.vlfeat.org/
+%
+% Input: A cell array of size equal to number of videos in the dataset.
+% Each cell is a matrix of dimension [features X behaviourwords] corresponding to
+% each video.  The feature matrix for each video is computed separately.
+% This example uses a pre-computed feature and label matrix stored in the
+% data directory in the current folder.
+%
+% Output: Leave-One-Out-CrossValidation Accuracy of Child's Engagement
+% Level Prediction. All the intermediate and final outputs are stored in
+% the output direcotry in the current folder. This program also computes
+% the the hidden state marginal feature vectors to be used for stage-2.
+% These are stored in the output directory.
+%
+% Dependencies: HCRF-UGM and VLFeat libraries need to be referenced
+% appropriately. This code assumes that these libraries are present in the
+% current folder.
+%
+% Description: The behaviour words are used as observations in the HCRF
+% framework. The HCRF model is constructed and trained using the HCRF-UGM
+% library.
+%
+% Author: Shyam Sundar Rajagopalan, Shyam.Rajagopalan@canberra.edu.au
+
+
+function JA_UGM_HCRF()
+
+clearvars ;
+close all ;
+addpath(genpath('./HCRF-UGM/')) ;
+addpath(genpath('./vlfeat-0.9.18/toolbox/')) ;
+vl_setup ;
+
+%-------------------------------------------------------
+% Initialization
+%-------------------------------------------------------
+strRoot = '.';
+strFeat = 'stip' ; % hoof %'stip' ;   % head  %stipall
+NUMCENTERS = 6 ; % Number of behaviour words
+NUMSTATES = 4 ; % Number of hidden states
+randstate = 500 ; % Random seed
+% global vHS_Prob ; 
+% vHS_Prob  = [] ;
+strResults = [strRoot '/output/Results.txt'] ;
+fResults = fopen(strResults,'a') ;
+fprintf(fResults,'\n\n') ;
+vl_twister('STATE', randstate) ;
+strFeatF = sprintf('vFeats_%s_C%d_R%d.mat',strFeat,NUMCENTERS,randstate) ;
+strLabF = sprintf('vLabels_%s_C%d_R%d.mat',strFeat,NUMCENTERS,randstate) ;
+
+% hog-hof features of dim 162 are used.
+strFeatPath = [strRoot '/data/' strFeatF ];
+strLabelsPath = [strRoot '/data/' strLabF];
+
+
+
+
+%-------------------------------------------------------
+% Load features and labels
+%-------------------------------------------------------
+if (~exist(strFeatPath,'file') )
+    fprintf('The feature and label data files are not present \n') ;
+    quit
+else
+    load (strFeatPath,'vFeats') ;
+    load (strLabelsPath,'vLabels') ;
+end
+
+
+%-------------------------------------------------------
+% Leave-One-Out-Cross-Validation
+%-------------------------------------------------------
+for v = 1 : size(vFeats,2)
+
+    tStart = tic ;
+    
+    % Train and Test Intances
+    nInstances = size(vFeats,2) ;
+    vTest =  v ;
+    vTrain = setdiff(1:nInstances,vTest) ;
+    fprintf('Validation Run for Test Instance = %d\n', v) ;
+
+    % Load train and test data
+    trainseq = vFeats(vTrain) ;
+    trainlabels = vLabels(vTrain) ;
+    testseq = vFeats(vTest) ;
+    testlabels = vLabels(vTest) ;
+    for i = 1 : length(trainlabels)
+        trainData.labels(i) = trainlabels{i}(1) ; 
+    end
+    trainData.data = trainseq ;
+    for i = 1 : length(testlabels)
+        testData.labels(i) = testlabels{i}(1); % Assign the first frame label as video label
+    end
+    testData.data = testseq ;
+    clearvars trainseq ;
+    clearvars trainlabels ;
+    clearvars testseq ;
+    clearvars testlabels ;
+
+ 
+    % HCRF Initialization
+    nStates = NUMSTATES ;  % 9 is good
+    lambdaVal = 1;
+    nEdgeFeatures = 1;
+    seed = 200;
+    s = RandStream.create('mt19937ar','seed',seed);
+    RandStream.setGlobalStream(s);
+
+    % Setup HCRF-UGM structures
+    nLabels = max(trainData.labels);
+    nXFeats = size(trainData.data{1},1);
+    edgeStruct = UGM_HCRF_makeEdgeStruct([],nStates,1);
+    nInstances = length(trainData.labels);
+    Xnode = cell(1,nInstances);
+    y=zeros(1,length(trainData.labels));
+    for instance = 1:nInstances
+        Xnode{instance} = trainData.data{instance}';
+        y(instance)     = trainData.labels(instance);
+    end
+    nodeMap = zeros(nStates, nXFeats,'int32');
+    featNo = 1;
+    for s = 1:nStates
+        for f = 1:nXFeats
+            nodeMap(s, f) = featNo;
+            featNo = featNo + 1;
+        end    
+    end
+    edgeMap = zeros(nStates, nStates, nLabels, nEdgeFeatures, 'int32');
+    for s1 = 1:nStates
+        for s2 = 1:nStates
+            for l = 1 : nLabels
+                for f = 1:nEdgeFeatures
+                    edgeMap(s1, s2,l, f) = featNo;
+                    featNo = featNo + 1;
+                end
+            end
+        end
+    end      
+    Xedge = zeros(nStates, nStates, nLabels);
+    labelMap = zeros(nStates, nLabels, 'int32');
+    for s = 1:nStates
+        for l = 1:nLabels
+                labelMap(s, l) = featNo;
+                featNo = featNo + 1;
+        end
+    end
+    nParams = featNo-1;
+
+
+    % Initialize weights
+    w = rand(nParams, 1);
+    edgeStruct.nStates = nStates;
+    edgeStruct.nLabels = nLabels;
+    edgeStruct.useMex  = 1;
+
+    % Set up regularization parameters
+    lambda = lambdaVal*ones(size(w));
+    reglaFunObj = @(w)penalizedL2(w,@UGM_HCRF_NLL_Shyam,lambda,Xnode,Xedge,y,nodeMap, edgeMap, labelMap, edgeStruct,@UGM_Infer_logChain);
+
+    % Training: LBFGS to find the weights
+    display('Training...');
+    options.LS=0;
+    options.TolFun=1e-2;
+    options.TolX=1e-2;
+    options.Method='lbfgs';
+    options.Display='on';
+    options.MaxIter=150; 
+    options.DerivativeCheck='off';
+    w = minFunc(reglaFunObj,w, options);
+    save ([strRoot '/output/model.mat'],'w') ;
+    
+  
+%     % Generate Hiden State prob to each class for a video. This is used as input to the second stage
+%     % This is generated from the UGM_HCRF_NLL.m 
+%     file = sprintf('vHS_Prob_%s_%d_C%s_%d_Train.mat',strFeat,nStates,strOutFileName,v) ;
+%     save ([strRoot '/output/' file],'vHS_Prob') ;
+%     vHS_Prob = [] ;
+    
+
+    % Testing
+    load ([strRoot '/output/model.mat'],'w') ;
+    fprintf('Testing on %d sequences\n',size(testData.data,2)) ;
+    test=testData.data;
+    for i = 1:length(test)    
+        Xnode={test{i}'};
+        for Y=1:nLabels
+            NLL(i,Y) = UGM_HCRF_NLL(w,Xnode,Xedge,Y,nodeMap, edgeMap, labelMap, edgeStruct,@UGM_Infer_logChain);
+        end
+%         % Generate hidden state prob file. This is used as input to the second stage
+%         This is generated from the UGM_HCRF_NLL.m
+%         file = sprintf('vHS_Prob_%s_%d_C%s_%d_Test.mat',strFeat,nStates,strOutFileName,v) ; % v
+%         save ([strRoot '/output/' file],'vHS_Prob') ;
+%         vHS_Prob = [] ;
+    end
+
+
+   
+    % Predict the child's engagement level
+    [a, predictedLabels]=min(NLL,[],2);
+    acc(v) = numel(find(int32(predictedLabels)-int32(testData.labels)'==0))/numel(int32(testData.labels));
+    vTimeElapsed(v) = toc(tStart)/60;
+    
+    c = fix(clock) ; 
+    strCurrentTime = sprintf('%04d-%02d-%02d_%02d:%02d:%02d\n',c(1),c(2),c(3),c(4),c(5),c(6)) ;
+    
+    fprintf('Accuracy for test instance %d is %2.1f%%, Elapsed Time = %2.1f min, Current Time = %s', v, acc(v)*100, vTimeElapsed(v),strCurrentTime);
+    fprintf(fResults, 'Accuracy for test instance %d is %2.1f%%, Elapsed Time = %2.1f min, Current Time = %s', v, acc(v)*100, vTimeElapsed(v),strCurrentTime);
+end  % End running all validation runs
+
+
+nAvgAcc = mean(acc) ;
+c = fix(clock) ; 
+strCurrentTime = sprintf('%04d-%02d-%02d_%02d:%02d:%02d\n',c(1),c(2),c(3),c(4),c(5),c(6)) ;
+fprintf('Leave-One-Out-CrossValidation Accuracy = %2.1f%%, Elapsed Time = %2.1f min, Current Time = %s',nAvgAcc*100, sum(vTimeElapsed), strCurrentTime) ;
+fprintf(fResults,'Leave-One-Out-CrossValidation Accuracy = %2.1f%%, Elapsed Time = %2.1f min, Current Time = %s',nAvgAcc*100, sum(vTimeElapsed), strCurrentTime) ;
+
+fclose(fResults) ;
+
+%%
+disp ('End') ;
+
+  
+   
+
+
+
